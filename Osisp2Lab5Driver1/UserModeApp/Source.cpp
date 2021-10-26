@@ -22,32 +22,46 @@ int main() {
 
 		DWORD bytes;
 		if (!ReadFile(hFile, &eventInfo, sizeof(ProcessEventInfo), &bytes, nullptr)) {
-			std::cout << "An error has occurred\n";
 			break;
 		}
 
-		if (bytes == sizeof(ProcessEventInfo)) {
-			if (eventInfo.eventType == ProcessCreate) {
-				std::cout << "opening process id: " << eventInfo.processId << '\n';
-
-				STARTUPINFO si = { sizeof(STARTUPINFO), 0 };
-				si.cb = sizeof(si);
-				PROCESS_INFORMATION pi = { 0 };
-				CreateProcessW(PROCESS_Y, NULL, 0, 0, 0, CREATE_DEFAULT_ERROR_MODE, 0, 0, &si, &pi);
-
-				processIdPairs[eventInfo.processId] = pi.hProcess;
-				CloseHandle(pi.hThread);
-			}
-			else if (eventInfo.eventType == ProcessExit) {
-				std::cout << "terminating process id: " << eventInfo.processId << '\n';
-				TerminateProcess(processIdPairs[eventInfo.processId], 1);
-				CloseHandle(processIdPairs[eventInfo.processId]);
-			}
-		}
-		else {
+		if (bytes == 0) {
 			Sleep(500);
+			continue;
 		}
+
+		if (bytes != sizeof(ProcessEventInfo)) {
+			break;
+		}
+
+
+		if (eventInfo.eventType == ProcessCreate) {
+			std::cout << "opening process id: " << eventInfo.processId << '\n';
+
+			STARTUPINFO si = { sizeof(STARTUPINFO), 0 };
+			si.cb = sizeof(si);
+			PROCESS_INFORMATION pi = { 0 };
+
+			CreateProcessW(PROCESS_Y, NULL, 0, 0, 0, CREATE_DEFAULT_ERROR_MODE, 0, 0, &si, &pi);
+			CloseHandle(pi.hThread);
+
+			processIdPairs[eventInfo.processId] = pi.hProcess;
+
+			continue;
+		}
+
+		if (eventInfo.eventType == ProcessExit) {
+			std::cout << "terminating process id: " << eventInfo.processId << '\n';
+
+			TerminateProcess(processIdPairs[eventInfo.processId], 1);
+			CloseHandle(processIdPairs[eventInfo.processId]);
+
+			continue;
+		}
+
+		break;
 	}
+	std::cout << "An error has occurred\n";
 
 	CloseHandle(hFile);
 	std::cin.get();

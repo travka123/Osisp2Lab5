@@ -85,8 +85,7 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 		if ((CreateInfo->ImageFileName == NULL) || (RtlCompareUnicodeString(&targetImage, CreateInfo->ImageFileName, TRUE) != 0)) {
 			return;
 		}
-
-		KdPrint(("Target process created"));
+		//KdPrint(("Target process created"));
 
 		ProcessEventItem* eItem = (ProcessEventItem*)ExAllocatePoolWithTag(PagedPool, sizeof(ProcessEventItem), DRIVER_TAG);
 		if (eItem == NULL) {
@@ -105,13 +104,14 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 
 		ExReleaseFastMutex(&g_Globals.mutex);
 
-		KdPrint(("Event enqueued"));
+		KdPrint(("Start event enqueued"));
 	}
 	else {
 
 		ULONG ulongProcessId = HandleToULong(ProcessId);
 		ProcessEventItem* killedProcess = NULL;
 
+		bool needRelise = false;
 		ExAcquireFastMutex(&g_Globals.mutex);
 
 		PLIST_ENTRY next = g_Globals.SearchListHead.Flink;
@@ -121,6 +121,11 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 			if (curr->eventInfo.processId == ulongProcessId) {
 
 				killedProcess = curr;
+
+				RemoveEntryList(&killedProcess->toSearchListEntry);
+				killedProcess->linksCount--;
+				needRelise = killedProcess->linksCount == 0;
+
 				break;
 			}
 
@@ -132,8 +137,12 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 		if (killedProcess == NULL) {
 			return;
 		}
+		//KdPrint(("Target process killed"));
 
-		KdPrint(("Target process killed"));
+		if (needRelise) {
+			ExFreePool(killedProcess);
+			KdPrint(("Event dequeued"));
+		}
 
 		ProcessEventItem* eItem = (ProcessEventItem*)ExAllocatePoolWithTag(PagedPool, sizeof(ProcessEventItem), DRIVER_TAG);
 		if (eItem == NULL) {
@@ -146,21 +155,13 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 		eItem->eventInfo.processId = ulongProcessId;
 		eItem->linksCount = 1;
 		
-		bool needRelise = false;
+		
 		ExAcquireFastMutex(&g_Globals.mutex);
 
 		InsertTailList(&g_Globals.readListHead, &eItem->readListEntry);
-		RemoveEntryList(&killedProcess->toSearchListEntry);
-		killedProcess->linksCount--;
-		needRelise = killedProcess->linksCount == 0;
 
 		ExReleaseFastMutex(&g_Globals.mutex);
-		KdPrint(("Event enqueued"));
-
-		if (needRelise) {
-			ExFreePool(killedProcess);
-			KdPrint(("Event dequeued"));
-		}
+		KdPrint(("Exit event enqueued"));
 	}
 }
 
