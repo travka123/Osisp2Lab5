@@ -13,4 +13,5 @@ struct Globals {
 	LIST_ENTRY readListHead;
 	LIST_ENTRY SearchListHead;
 	FAST_MUTEX mutex;
+	KSEMAPHORE semaphore;
 };

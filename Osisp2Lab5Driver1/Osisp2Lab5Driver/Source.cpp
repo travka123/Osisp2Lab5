@@ -28,8 +28,6 @@ extern "C" NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT  DriverObject, _In_ PUNICODE
 		return status;
 	}
 
-	DeviceObject->Flags |= DO_BUFFERED_IO;
-
 	status = IoCreateSymbolicLink(&symLink, &devName);
 	if (!NT_SUCCESS(status)) {
 		KdPrint(("Failed to create link"));
@@ -48,6 +46,7 @@ extern "C" NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT  DriverObject, _In_ PUNICODE
 	InitializeListHead(&g_Globals.SearchListHead);
 	InitializeListHead(&g_Globals.readListHead);
 	ExInitializeFastMutex(&g_Globals.mutex);
+	KeInitializeSemaphore(&g_Globals.semaphore, 0, 1);
 
 	DriverObject->DriverUnload = ProcessesLifeCycleWatcherUnload;
 	DriverObject->MajorFunction[IRP_MJ_CREATE] = DriverObject->MajorFunction[IRP_MJ_CLOSE] = ProcessesLifeCycleWatcherCreateClose;
@@ -99,6 +98,10 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 
 		ExAcquireFastMutex(&g_Globals.mutex);
 
+		if (g_Globals.readListHead.Flink == &g_Globals.readListHead) {
+			KeReleaseSemaphore(&g_Globals.semaphore, 0, 1, FALSE);
+		}
+
 		InsertTailList(&g_Globals.SearchListHead, &eItem->toSearchListEntry);
 		InsertTailList(&g_Globals.readListHead, &eItem->readListEntry);
 
@@ -133,7 +136,7 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 		}
 
 		ExReleaseFastMutex(&g_Globals.mutex);
-		
+
 		if (killedProcess == NULL) {
 			return;
 		}
@@ -154,9 +157,13 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 		eItem->eventInfo.eventType = ProcessExit;
 		eItem->eventInfo.processId = ulongProcessId;
 		eItem->linksCount = 1;
-		
-		
+
+
 		ExAcquireFastMutex(&g_Globals.mutex);
+
+		if (g_Globals.readListHead.Flink == &g_Globals.readListHead) {
+			KeReleaseSemaphore(&g_Globals.semaphore, 0, 1, FALSE);
+		}
 
 		InsertTailList(&g_Globals.readListHead, &eItem->readListEntry);
 
@@ -178,31 +185,32 @@ NTSTATUS ProcessesLifeCycleWatcherRead(_In_ PDEVICE_OBJECT DeviceObject, _In_ PI
 	ProcessEventInfo* sysbuffer = (ProcessEventInfo*)Irp->AssociatedIrp.SystemBuffer;
 	ProcessEventItem* readingItem = NULL;
 
+	//Deadlock if IRQL > DISPATCH_LEVEL
+	KeWaitForSingleObject(&g_Globals.semaphore, UserRequest, UserMode, TRUE, NULL);
+
 	bool needRelise = false;
 	ExAcquireFastMutex(&g_Globals.mutex);
 
+	readingItem = CONTAINING_RECORD(g_Globals.readListHead.Flink, ProcessEventItem, readListEntry);
+	RemoveEntryList(&readingItem->readListEntry);
+	readingItem->linksCount--;
+	needRelise = readingItem->linksCount == 0;
+
 	if (g_Globals.readListHead.Flink != &g_Globals.readListHead) {
-		readingItem = CONTAINING_RECORD(g_Globals.readListHead.Flink, ProcessEventItem, readListEntry);
-		RemoveEntryList(&readingItem->readListEntry);
-		readingItem->linksCount--;
-		needRelise = readingItem->linksCount == 0;
+		KeReleaseSemaphore(&g_Globals.semaphore, 0, 1, FALSE);
 	}
 
 	ExReleaseFastMutex(&g_Globals.mutex);
 
-	if (readingItem != NULL) {
-		sysbuffer->eventType = readingItem->eventInfo.eventType;
-		sysbuffer->processId = readingItem->eventInfo.processId;
+	sysbuffer->eventType = readingItem->eventInfo.eventType;
+	sysbuffer->processId = readingItem->eventInfo.processId;
 
-		if (needRelise) {
-			ExFreePool(readingItem);
-			KdPrint(("Event dequeued"));
-		}
-
-		return CompleteIrp(Irp, STATUS_SUCCESS, sizeof(ProcessEventInfo));
+	if (needRelise) {
+		ExFreePool(readingItem);
+		KdPrint(("Event dequeued"));
 	}
-	
-	return CompleteIrp(Irp, STATUS_SUCCESS, 0);
+
+	return CompleteIrp(Irp, STATUS_SUCCESS, sizeof(ProcessEventInfo));
 }
 
 NTSTATUS CompleteIrp(PIRP Irp, NTSTATUS status, ULONG_PTR info) {
