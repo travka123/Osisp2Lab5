@@ -7,7 +7,7 @@
 #include "../Osisp2Lab5Driver/Constants.h"
 
 int main() {
-	
+
 	HANDLE hFile = CreateFile(L"\\\\.\\ProcessesLifeCycleWatcher", GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
 	if (hFile == INVALID_HANDLE_VALUE) {
 		std::cout << "Error: driver must be running!\n";
@@ -23,6 +23,11 @@ int main() {
 		DWORD bytes;
 		if (!ReadFile(hFile, &eventInfo, sizeof(ProcessEventInfo), &bytes, nullptr)) {
 			break;
+		}
+
+		if (bytes == 0) {
+			Sleep(500);
+			continue;
 		}
 
 		if (bytes != sizeof(ProcessEventInfo)) {
