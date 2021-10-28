@@ -104,6 +104,8 @@ NTSTATUS OnRegistryNotify(PVOID context, PVOID arg1, PVOID arg2) {
 	if (!NT_SUCCESS(status)) {
 		KdPrint(("Unable to write to file"));
 
+		ZwClose(hFile);
+
 		return STATUS_SUCCESS;
 	}
 
